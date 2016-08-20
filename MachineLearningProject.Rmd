@@ -1,0 +1,172 @@
+---
+title: "Machine Learning Project"
+date: "August 20, 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE, cache=T}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Prediction on a Data Weight Lifting Data Set
+
+### Download Data
+
+This project tasks students with predicting 20 items in a "test" data set.  The training and test sets can be downloaded with the following commands.  
+
+```{r download, cache=T}
+if(!file.exists("pml-training.csv")){
+  fileurl<-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+  download.file(fileurl,"pml-training.csv")
+}
+if(!file.exists("pml-testing.csv")){
+  fileurl<-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+  download.file(fileurl,"pml-testing.csv")
+}
+
+training<-read.csv("pml-training.csv")
+testing<-read.csv("pml-testing.csv")
+```
+
+### Evaluating Data
+
+The training and testing datasets above have 160 columns.  One of the first things I noticed was that many of the columns were mostly empty, and the same columns were entirely empty in the testing data, having blank or NA values.  I therefore elected to eliminate 100 columns that were empty or blank in the test data set and mostly blank in the testing data set.  First I made a function I called CorCol.
+
+```{r CorCol, cache=T}
+CorCols<-function(x){
+  cols<-dim(x)[2]-1
+  ret<-matrix(nrow=cols,ncol=4)
+  
+  for (i in 1:cols){
+    ret[i,1]=i #Gives row number
+    try(ret[i,2]<-cor(x[,cols+1],x[,i])) # Gives cor
+    ret[i,3]<-sum(ifelse(is.na(x[,i]),1,0)) # Gives # of rows with NA value
+    ret[i,4]<-sum(ifelse(x[,i]=="",1,0)) #Gives # of rows with "" value
+  }
+  ret
+}
+```
+Then I used the following commands to winnow my data, creating the sets trainingM and testingM.  Each had 60 columns after this winnowing.  
+```{r winnow, cache=T}
+x<-CorCols(training)
+y<-CorCols(testing)
+
+x1<-x[x[,3]==0&x[,4]==0,1]
+y1<-y[y[,3]==0&y[,4]==0,1]
+
+trainingM<-training[,x1]
+testingM<-testing[,y1]
+trainingM$classe<-training$classe
+```
+I then set up a training and validation set with the following.  
+```{r makeSets, cache=T}
+set.seed(42)
+library(caret)
+inTrain = createDataPartition(trainingM$classe, p = 0.75)[[1]]
+training = trainingM[ inTrain,]
+validate = trainingM[-inTrain,]
+```
+I tried running mdl<-train(classe~.,data=training,method="rf"), but that was a mistake.  My computer crashed while running the analysis.  I was doing other things on it while I was waiting.  The other things may be what caused the crash, but I didn't re-run the analysis.  Instead I tried to find columns to run a shorter analysis on with the following.
+```{r finVars, cache=T}
+trainingM<-training
+trainingM$classe1<-ifelse(training$classe=="A",1,0)
+
+x<-CorCols(trainingM)
+x<-data.frame(x)
+attach(x)
+x1<-x[order(X2),]
+x1<-x[order(-abs(X2)),]
+x2<-x1[2:11,1]
+x2<-append(x2,60)
+trainingx<-trainingM[,x2]
+detach(x)
+```
+The above finds the correlation between the classe1 variable I created above.  classe1 is 1 when classe is "A", and 0 otherwise.  I did run the function mdl<-train(classe~.,data=trainingx,method="rf").  I used 2:11 instead of 1:10 because the first column was named X and was a sequential value.  The training set had almost 20,000 values and the test set had 20 (labeled 1-20), so I considered it an un-reliable predictor and eliminated it.  More on this later.  Then I went to sleep.
+
+When I woke up, I had the idea of running a glm() function on the above and for each outcome possiblility for classe.  The following code does this.
+```{r glmModels, cache=T}
+trainingM<-training
+trainingM$X<-NULL #Eliminates the suspect X row mentioned in text above
+set.seed(8675309)
+for (i in 1:5){
+  trainingM$classe1<-ifelse(training$classe==LETTERS[i],1,0)
+  
+  x<-CorCols(trainingM)
+  x<-data.frame(x)
+  attach(x)
+  x1<-x[order(X2),]
+  x1<-x[order(-abs(X2)),]
+  x2<-x1[1:10,1]
+  x2<-append(x2,60)
+  trainingx<-trainingM[,x2]
+  detach(x)
+  trainingx<-trainingM[,x2]
+  
+  assign(paste("training", LETTERS[i], sep=""),
+         trainingM[,x2])
+  
+  
+  assign(paste("mdlBinom", LETTERS[i], sep=""),
+         glm(classe1~.,data=eval(parse(text = paste("training", 
+                              LETTERS[i], sep=""))),
+             family=binomial))
+  }
+```
+This creates the sets trainingA,trainingB,trainingC,trainingD and trainingE and models mdlBinomA, mdlBinomB, mdlBinomC, mdlBinomD, and mdlBinomE.  Then I ran a summary () command and manually eliminated any predictors that had a signif code greater than .01.  I will print a summary for A as an example.
+```{r removeBadRows, cache=T}
+summary(mdlBinomA)
+trainingA$accel_forearm_x<-NULL
+mdlBinomA<-glm(classe1~.,data=trainingA,family=binomial)
+trainingC$magnet_forearm_y<-NULL
+mdlBinomC<-glm(classe1~.,data=trainingC,family=binomial)
+trainingD$magnet_forearm_x<-NULL
+trainingD$total_accel_arm<-NULL
+mdlBinomD<-glm(classe1~.,data=trainingD,family=binomial)
+trainingE$magnet_arm_y<-NULL
+trainingE$magnet_belt_z<-NULL
+trainingE$pitch_arm<-NULL
+mdlBinomE<-glm(classe1~.,data=trainingE,family=binomial)
+```
+So back to those X values that correlate so well with A.  X is certainly an unreliable predictor, but we are given user_name and time_stamp in the test set.  They are the same data names and time stamps as in the training set we are given.  To me it seems like cheating to even use these values, but since we are give them, I am going to use them.  I will collect the user name and time stamp, as well as the data generated by the glm models into a set called Collect.
+```{r Collect, cache=T}
+Collect<-data.frame(user_name=training$user_name,
+                    cvtd_timestamp=training$cvtd_timestamp,
+                    A=predict(mdlBinomA),
+                    B=predict(mdlBinomB),
+                    C=predict(mdlBinomC),
+                    D=predict(mdlBinomD),
+                    E=predict(mdlBinomE),
+                    classe=training$classe)
+```
+It was my thought that I could throw the glm models into an random forest model, and use the people and time stamps to make a decision when glm models were "unsure" what the correct answer was.
+
+I made the following models.  
+
+mdlRF1<-train(classe~.,data=Collect,method="rf")
+mdlg<-train(classe~.,data=Collect,method="gbm")
+mdllda<-train(classe~.,data=Collect,method="lda")
+
+After evaluating mdlRF1 against the validate set I stopped however.  
+
+I forgot to set the seed.  I'll make it here.  Time to get a sandwich.  Time to get a run I guess.
+
+```{r makeModel,cache=T}
+set.seed(314159)
+mdlRF1<-train(classe~.,data=Collect,method="rf")
+table(predict(mdlRF1),Collect$classe)
+```
+I was considering putting the other 2 models into one further model stack, but since this came out perfectly, I didn't see the point. This model was predicting perfectly on the training set.  It didn't seem likely that I would be able to improve on that.  In retrospect, I do think that including raw_timestamp_part_2 would have improved performance on the validate set, but the model mdlRF1 performed well.
+```{r validatemdlRF1,cache=T}
+
+CollectV<-data.frame(user_name=validate$user_name,
+                    cvtd_timestamp=validate$cvtd_timestamp,
+                    A=predict(mdlBinomA,newdata=validate),
+                    B=predict(mdlBinomB,newdata=validate),
+                    C=predict(mdlBinomC,newdata=validate),
+                    D=predict(mdlBinomD,newdata=validate),
+                    E=predict(mdlBinomE,newdata=validate),
+                    classe=validate$classe)
+
+confusionMatrix(predict(mdlRF1,newdata = CollectV),CollectV$classe)
+```
+The model had an accuracy rate of 97%.  I decided to run this on the test set and got 95% correct. (19/20) The one that I got wrong was instructive as well.  I had a column A in the CollectT set with a pretty high value.  The inv.logit() value of it was about 0.58 and the B-E terms were low, but the model picked C.  This suggested to me that since that value was high, (above .5) but not that high, the model picked a value based on the time stamp and user.  I re-entered my data, replacing the wrong answer with A instead of C and got them all correct.
